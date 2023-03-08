@@ -15,9 +15,11 @@ def dice_coeff(gt_seg, est_seg):
 
 def vod_score(gt_seg, est_seg):
     est_mapping, gt_mapping = get_binary_map_for_segments(est_seg, gt_seg)
-    sum_of_volumes = np.sum(est_mapping) + np.sum(gt_mapping)
+    ct_union = est_mapping + gt_mapping
+    ct_union[ct_union > 0] = 1
+    sum_of_volumes = np.sum(ct_union)
     if sum_of_volumes > 0:
-        return 1 - np.sum(est_mapping[gt_mapping == 1] == 1) / sum_of_volumes
+        return 1 - np.sum(gt_mapping[est_mapping == 1]) / sum_of_volumes
     return 0
 
 

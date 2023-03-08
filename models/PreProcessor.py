@@ -17,7 +17,8 @@ from metrics.scores import dice_coeff, vod_score
 ################### PROJECT CONSTANTS ###################
 #########################################################
 """
-MAX_VOXEL_VALUE = 2**16-1
+
+MAX_VOXEL_VALUE = 2 ** 16 - 1
 MIN_VOXEL_VALUE = 0
 CONNECTED_COMPONENTS = 1
 INTENSITY_HISTOGRAM = 2
@@ -31,7 +32,7 @@ HIGHEST_DICE = -1
 INITIAL_RADIUS = 17
 ROWS_PADDING = 20
 COLUMNS_PADDING = 20
-GET_X_CENTER, GET_Y_CENTER, GET_CIRCLE_RADIUS = 0,1,2
+GET_X_CENTER, GET_Y_CENTER, GET_CIRCLE_RADIUS = 0, 1, 2
 
 
 class PreProcessor:
@@ -48,7 +49,7 @@ class PreProcessor:
         self.Imax = Imax
 
     @staticmethod
-    def SegmentationByTH(Imin, Imax, img_data):
+    def segmentation_by_threshold(Imin, Imax, img_data):
         """
         This function is given as inputs a grayscale NIFTI file (.nii.gz) and two integers – the minimal and maximal thresholds. The function generates a segmentation NIFTI file of the same dimensions, with a binary segmentation – 1 for voxels between Imin and Imax, 0 otherwise. This segmentation NIFTI file should be saved under the name <nifty_file>_seg_<Imin>_<Imax>.nii.gz.
         The function returns 1 if successful, 0 otherwise. Preferably, raise descriptive errors when returning 0.
@@ -64,7 +65,7 @@ class PreProcessor:
         closed_img = skimage.morphology.closing(img)
         return closed_img
 
-    def SkeletonTHFinder(self):
+    def skeleton_threshold_finder(self):
         """
         This function will find the best threshold for the skeleton segmentation, by iterating over Haunsfield units
         in the range of lowerbound (start parameter to stop parameter) to Imax given in the class constructor.
@@ -72,20 +73,25 @@ class PreProcessor:
         :return: File containing the skeleton layer, as a result of the threshold application.
         """
         with multiprocessing.Manager() as manager:
+            processed_scan = PreProcessor.process_img(self.ct_data)
+            processed_scan = np.array(processed_scan, dtype=np.int16)
+            final_img = nib.Nifti1Image(processed_scan, self.raw_ct.affine)
+            nib.save(final_img, filename="../conversion.nii.gz")
+            self.ct_data = processed_scan
             # Prepare processes for task:
-            num_cores = multiprocessing.cpu_count()git
+            num_cores = multiprocessing.cpu_count()
             # Prepare tasks distribution between all processes:
-            ranges = PreProcessor._tasks_dispatcher(num_cores, start=150, stop=514, resolution=self.resolution)
+            ranges = PreProcessor._tasks_scheduler(num_cores, start=150, stop=514, resolution=self.resolution)
             # Save process's results in a dictionary, where keys are PIDs and values are [connected components,
             # [threshold images]] v
             results = manager.dict()
             # Create all the processes, according to the number of cores available:
             processes = [multiprocessing.Process(target=PreProcessor.do_segmentation,
                                                  args=(
-                                                 ranges[pid], self.Imax, results, pid, self.ct_data)) for
+                                                     ranges[pid], self.Imax, results, pid, self.ct_data)) for
                          pid
                          in range(num_cores)]
-            # Execution:
+            # Execution
             for p in processes:
                 p.start()
             for p in processes:
@@ -99,9 +105,9 @@ class PreProcessor:
 
             plt.plot(cmps)
             plt.title(f"on file {self.filepath}")
-            plt.show()
+            plt.savefig()
             # Find all local minima
-            dips =  self.find_all_minima(cmps)
+            dips = self.find_all_minima(cmps)
             self.bones = img_threshold_result[dips[0]]
             manager.shutdown()
             final_skeleton = nib.Nifti1Image(self.extract_largest_component(self.bones), self.raw_ct.affine)
@@ -128,7 +134,7 @@ class PreProcessor:
         img_res = []
         ccmps = []
         for i_min in Imin_range:
-            img = PreProcessor.SegmentationByTH(Imin=i_min, Imax=Imax, img_data=img_data)
+            img = PreProcessor.segmentation_by_threshold(Imin=i_min, Imax=Imax, img_data=img_data)
             _, cmp = label(img, return_num=True)
             ccmps.append(cmp)
             img_res.append(img)
@@ -136,7 +142,7 @@ class PreProcessor:
         result_keep[pid] = process_results
 
     @staticmethod
-    def _find_circles(patched_slice, prev_circle=(0, 0, 0)):
+    def find_circles(patched_slice, prev_circle=(0, 0, 0)):
         """
         This function finds the best circles in a given patched CT-scan slice. it does so by finding circles on
         different levels of the 2-level image-pyramid. by using the pyramid, we reduce the 'noisy' circles when we
@@ -146,8 +152,7 @@ class PreProcessor:
         :return: best_circle: the best circle in terms of pyramid matched pair, and also similarity circles to the
         prev_circle.
         """
-        pyramid = [np.copy(patched_slice)]
-        pyramid.append(cv2.pyrDown(np.copy(patched_slice)))
+        pyramid = [np.copy(patched_slice), cv2.pyrDown(np.copy(patched_slice))]
         # Define the parameters for the HoughCircles function
         circles_all_floors = []
         best_circle = None
@@ -177,7 +182,8 @@ class PreProcessor:
     @staticmethod
     def best_circ(cur_circles, slice_ROI, prev_circle):
         """
-
+        given all current circles returned by hough transform, this function evaluates the dice coefficient for each
+        circle with the previous circle selected as the best circle w.r.t the previous slice
         :param cur_circles:
         :param slice_ROI:
         :param prev_circle:
@@ -190,10 +196,9 @@ class PreProcessor:
         for cir in cur_circles:
             x, y, rad = cir[GET_X_CENTER], cir[GET_Y_CENTER], cir[GET_CIRCLE_RADIUS]
             cur_mask = np.zeros(slice_ROI.shape).astype(uint16)
-            cv2.circle(cur_mask, (int(x), int(y)), int(rad),WHITE_COLOR, FILL_SHAPE)
+            cv2.circle(cur_mask, (int(x), int(y)), int(rad), WHITE_COLOR, FILL_SHAPE)
             dices.append(dice_coeff(prev_mask, cur_mask))
         dist_score_ord = np.argsort(dices)
-
         return cur_circles[dist_score_ord[HIGHEST_DICE]]
 
     @staticmethod
@@ -229,31 +234,28 @@ class PreProcessor:
         return matched_circles
 
     @staticmethod
-    def _tasks_dispatcher(num_cores, resolution, start=150, stop=514):
+    def _tasks_scheduler(num_cores: int, resolution: int, start=150, stop=514):
         """
         Given a number of processes, we use this dispatcher in order to divide the tasks uniformly across the
         workers.
         :param num_cores: number of cpus in the working computer
         :return: Ranges of H.U values to be  calculated by each process
         """
-        jobs =(stop - start) // resolution
+        jobs = (stop - start) // resolution
         d = jobs // num_cores
         ranges = [
             np.arange(start=start + r * d * resolution, stop=start + r * d * resolution + d * resolution,
-                      step=resolution) for r in range(num_cores-1)]
-        if not jobs % num_cores:
-            ranges.append(np.arange(start=start + (num_cores-1) * d * resolution, stop=start + num_cores * d * resolution,
-                      step=resolution))
-            return ranges
+                      step=resolution) for r in range(num_cores - 1)]
 
-        ranges.append(np.arange(start=start + (num_cores - 1) * d * resolution, stop=start + num_cores * d * resolution
-                                                                                     + (jobs % num_cores) * resolution,
-                                step=resolution))
+        d += jobs % num_cores
+        start = ranges[-1][-1] + resolution
+        last_job = np.arange(start=start, stop=start + d * resolution,
+                             step=resolution)
+        ranges.append(last_job)
         return ranges
 
-
     @staticmethod
-    def THFinder(roi_patch):
+    def threshold_finder(roi_patch: np.ndarray):
         """
         Given the appropriate path of where we predicted (or guessed at the first iteration) the aorta location,
         we than calculate the appropriate values of the next threshold (High and low)to apply, in order to extract the correct
@@ -268,11 +270,12 @@ class PreProcessor:
         return int(avg - std), int(avg + std)
 
     @staticmethod
-    def process_img(img_data):
+    def process_img(img_data: np.ndarray):
         """
         Simply processing the image, by applying the histogram equalization and bilateral filtering to reduce
         the noise in each slice, making it easier to generalize the thresholding application stage, which is done right
         after this stage.
+        :param img_data:
         :param start:
         :return:
         """
@@ -280,14 +283,13 @@ class PreProcessor:
         img_data[img_data < 0] = 0
         img_data = img_data.astype(np.uint8)
         for i in range(img_data.shape[2]):
-            slice = img_data[:, :, i]
-            slice = cv2.equalizeHist(slice)
-            bilateral = cv2.bilateralFilter(slice, d=9, sigmaColor=95, sigmaSpace=50)
+            ct_slice = img_data[:, :, i]
+            ct_slice = cv2.equalizeHist(ct_slice)
+            bilateral = cv2.bilateralFilter(ct_slice, d=9, sigmaColor=95, sigmaSpace=50)
             img_data[:, :, i] = bilateral.astype(np.uint8)
         return img_data
 
-
-    def AortaTHFinder(self, gt):
+    def pipelined_aorta_segmentation(self, gt):
         """
         When Called, this function will will find and segment the Aorta's ROI by using the provided L1 CT-scan to get
         a minimal ROI, by making the assumption that the Aorta should be near the L1 vertebrate.
@@ -296,8 +298,8 @@ class PreProcessor:
         :return: Creating a file named <case_i>_Aorta_segmentation.nii.gz in the root directory of the project.
         This file contains the Aorta's segmentation in the CT scan provided by the user.
         """
-        rows_center_start, rows_center_stop, column_center_start, axial_upper_bound, axial_lower_bound, \
-        col_border = PreProcessor.find_L1_borders(self.l1_data)
+        rows_center_start, rows_center_stop, column_center_start, axial_upper_bound, axial_lower_bound, col_border = PreProcessor.find_L1_borders(self.l1_data)
+
         circ = (0, 0, 0)
         rad = INITIAL_RADIUS
         # Perform image processing on the entire CT-scan before moving on to the segmentation task
@@ -314,26 +316,36 @@ class PreProcessor:
         for axial_idx in range(axial_upper_bound - 1, axial_lower_bound - 1, -1):
             # Recalculate the border of L1 vertebrate:
             border_col = int(max(column_center_start, col_border[axial_idx]))
-
+            x = self.ct_data[rows_center_start:rows_center_stop,
+                int(col_border[axial_idx]): int(col_border[axial_idx]) + rad * 2, axial_idx]
+            title = "ROI Patch"
+            self.generate_plot_fig(x, title)
             # Approximate the correct threshold values according to the recent segmentation ROI:
-            threshold_low, threshold_high = PreProcessor.THFinder(seg)
+            threshold_low, threshold_high = PreProcessor.threshold_finder(seg)
             roi_patch = np.copy(self.ct_data[rows_center_start:rows_center_stop,
                                 int(col_border[axial_idx]): int(col_border[axial_idx]) + rad * 2, axial_idx])
             roi_patch[(roi_patch < threshold_low) | (roi_patch > threshold_high)] = 0
             roi_patch[roi_patch > 0] = 1
             roi_patch = dilation(roi_patch)
+
+            title = "Binary mask"
+            self.generate_plot_fig(img_of=roi_patch, title=title)
+
             roi_patch = PreProcessor.extract_largest_component(roi_patch)
 
             # Find best circle among all circles using HoughTransform
-            res_circ = PreProcessor._find_circles(roi_patch, circ)
+            res_circ = PreProcessor.find_circles(roi_patch, circ)
             x, y, r = res_circ[GET_X_CENTER], res_circ[GET_Y_CENTER], res_circ[GET_CIRCLE_RADIUS]
             circ = res_circ
             aorta_prediction = np.zeros(roi_patch.shape).astype(np.uint8)
 
             cv2.circle(aorta_prediction, (x, y), r + RADIUS_PADDING, WHITE_COLOR, FILL_SHAPE)
+
+            title = "Circular segmentation"
+            self.generate_plot_fig(aorta_prediction, title)
             # Perform final segmentation using chan-vese algorithm, localized to the approximate circular ROI
-            aorta_prediction = morphological_chan_vese(aorta_prediction * roi_patch, num_iter=100, init_level_set='disk',
-                                                       smoothing=4)
+            aorta_prediction = morphological_chan_vese(aorta_prediction * roi_patch, num_iter=50, init_level_set='disk',
+                                                       smoothing=4, lambda2=4)
 
             # Prepare mask for performing the slicing on the
             aorta_mask = np.zeros(dims)
@@ -341,6 +353,9 @@ class PreProcessor:
             aorta_prediction[aorta_prediction > 0] = 1
             patch = self.ct_data[rows_center_start:rows_center_stop, border_col: border_col + rad * 2, axial_idx - 1]
             seg = np.array(patch * aorta_prediction)
+            plt.imshow(seg, cmap="gray")
+            plt.title("Final segmentation")
+            plt.show()
 
             # Performing the aorta segmentation
             aorta_segmentation[:, :, axial_idx] *= aorta_mask
@@ -353,16 +368,25 @@ class PreProcessor:
             column_center_start -= rad
             rows_center_start -= rad
             col_border[axial_idx - 1] = x + col_border[axial_idx] - r
-
             aorta_segmentation[:, :, axial_idx] *= aorta_mask
         dice_score = dice_coeff(gt[:, :, axial_lower_bound: axial_upper_bound],
                                 aorta_segmentation[:, :, axial_lower_bound:
                                                          axial_upper_bound])
+        vod = vod_score(gt[:, :, axial_lower_bound: axial_upper_bound],
+                        aorta_segmentation[:, :, axial_lower_bound:
+                                                 axial_upper_bound])
         case_i = self.filepath.split('.')[0].split('/')[1]
-        print(f"case: {case_i}, dice_score is: {dice_score}")
+        print(f"case: {case_i}, Dice score is: {dice_score}")
+        print(f"case: {case_i}, VOD score is: {vod}")
+
         final = nib.as_closest_canonical(nib.Nifti1Image(aorta_segmentation, self.raw_ct.affine))
         nib.save(final, f"{case_i}_Aorta_segmentation.nii.gz")
         return result
+
+    def generate_plot_fig(self, img_of, title):
+        plt.imshow(img_of, cmap="gray")
+        plt.title(title)
+        plt.show()
 
     @staticmethod
     def extract_largest_component(threshold_img, n=1):
@@ -381,27 +405,39 @@ class PreProcessor:
         return largestCC_img
 
     @staticmethod
-    def find_L1_borders(l1_img):
+    def find_L1_borders(l1_img: np.ndarray):
         """
+        Given a 3d segmentation of L1 vertebrate, this function will calculate the boundaries of the given L1, to be
+        used later for the final stage, the Aorta segmentation.
         :param l1_img:
         :return:
         """
+        # Find the non-zero values of the input image along x, y, z axes
         x_nonzero_in, y_nonzero_in, z_nonzero_in = np.nonzero(l1_img)
         axial_upper_bound, axial_lower_bound = np.max(z_nonzero_in), np.min(z_nonzero_in)
+
+        # Determine the start and stop center points of the column and row
         column_center_start = np.max(y_nonzero_in)
         rows_center_start = np.min(x_nonzero_in)
         rows_center_stop = (np.max(x_nonzero_in) + np.min(x_nonzero_in)) // 2
+
+        # Create a copy of the input image and remove the pixels on the left side of the mid column
         l1_cpy = np.copy(l1_img)
         mid_col = int(np.min(y_nonzero_in) + (column_center_start - np.min(y_nonzero_in)) // 1.2)
         l1_cpy[:, :mid_col, :] = 0
+
+        # Calculate the column start line from the bottom of the axial view
         col_start_line = np.zeros((l1_img.shape[2],))
         for ax_i in range(axial_upper_bound - 1, axial_lower_bound - 1, -1):
             _, sl = np.where(l1_cpy[:, :, ax_i] > 0)
             try:
+                # try to find  the highest index that bounds L1 (if there is any)
                 sl = np.max(sl)
                 col_start_line[ax_i] = sl
-            except:
+            except Exception(ValueError) as e:
+                print(e)
                 col_start_line[ax_i] = int(col_start_line[ax_i + 1])
+
         holes = np.nonzero(col_start_line)
         upper_holes = np.max(holes)
         lower_holes = np.min(holes)
@@ -424,7 +460,7 @@ class PreProcessor:
 
 
 if __name__ == "__main__":
-    for case_i in range(1, 5):
+    for case_i in range(2, 4):
         s = f"resources/Case{case_i}_CT.nii.gz"
         case = s.split('.')[0].split('/')[1]
         aorta = f"resources/Case{case_i}_Aorta.nii.gz"
@@ -432,8 +468,6 @@ if __name__ == "__main__":
         aorta_gt = aorta_raw.get_fdata()
         pp = PreProcessor(file_path_scan=f"resources/Case{case_i}_CT.nii.gz",
                           file_path_l1=f"resources/Case{case_i}_L1.nii.gz", output_directory="")
-        pp.SkeletonTHFinder()
-        aorta_pred = pp.AortaTHFinder(aorta_gt)
-        dice = dice_coeff(aorta_gt, aorta_pred)
-        vod = vod_score(aorta_gt, aorta_pred)
-        print(f"Result for {case_i} Aorta segmentation:\nDice coefficient {dice} \nVOD score {vod}")
+        # pp.skeleton_threshold_finder()
+        aorta_pred = pp.pipelined_aorta_segmentation(aorta_gt)
+        # print(f"Result for {case_i} Aorta segmentation:\nDice coefficient {dice} \nVOD score {vod}")
